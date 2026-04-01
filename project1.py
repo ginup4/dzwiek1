@@ -127,10 +127,18 @@ class AudioAnalyzerGUI:
         # wykresy
         nplots = 1 + len(funcs)
         plt.figure(figsize=(10, 2.7 * nplots))
-        plt.subplot(nplots, 1, 1)
+        ax_signal = plt.subplot(nplots, 1, 1)
         # rysowanie oryginalnego sygnalu
-        plt.title("original recording")
-        plt.plot(time, samples)
+        ax_signal.set_title("original recording")
+        ax_signal.plot(time, samples)
+
+        if self.show_silence.get():
+            silence_flags = silence(frames, vol_thr, zcr_thr)
+            for idx, is_silent in enumerate(silence_flags):
+                if is_silent:
+                    start_sec = idx * frame_length / 1000
+                    end_sec = min((idx + 1) * frame_length / 1000, slen * dt)
+                    ax_signal.axvspan(start_sec, end_sec, color="orange", alpha=0.25)
 
         # rysowanie parametrow wybranych w GUI
         for i, (name, func) in enumerate(funcs):
