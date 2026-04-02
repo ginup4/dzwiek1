@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from scipy.io import wavfile
 
 srate = None
+MAX_SIGNAL_PLOT_POINTS = 200000
 
 
 class AudioAnalyzerGUI:
@@ -193,7 +194,7 @@ class AudioAnalyzerGUI:
             return
 
         dtype = samples.dtype
-        samples = samples.astype(float)
+        samples = samples.astype(np.float32)
         if len(samples.shape) == 2:
             samples = samples[:, 0] + samples[:, 1]
         if dtype == np.uint8:
@@ -214,8 +215,8 @@ class AudioAnalyzerGUI:
         frames = [samples[s:s + frame_slen] for s in range(0, slen, frame_slen)]
 
         # pomocnicze listy zeby wykresy mialy sekundy na osi x
-        time = [i * dt for i in range(slen)]
-        frame_time = [i * frame_length / 1000 for i in range(len(frames))]
+        time = np.arange(slen, dtype=np.float64) * dt
+        frame_time = np.arange(len(frames), dtype=np.float64) * (frame_length / 1000.0)
 
         # Obliczamy baze cech raz; sa uzywane do wykresow, klasyfikacji i zapisu.
         volume_values = volume(frames)
@@ -303,31 +304,44 @@ class AudioAnalyzerGUI:
         ax_signal = plt.subplot(nplots, 1, 1)
         # rysowanie oryginalnego sygnalu
         ax_signal.set_title("original recording")
-        ax_signal.plot(time, samples)
+        plot_time, plot_samples = downsample_signal_for_plot(time, samples)
+        ax_signal.plot(plot_time, plot_samples, label="signal")
+
+        show_overlay_legend = False
 
         if self.show_silence.get():
+            show_overlay_legend = True
             silence_flags = result_map["silence"]
-            for idx, is_silent in enumerate(silence_flags):
-                if is_silent:
-                    start_sec = idx * frame_length / 1000
-                    end_sec = min((idx + 1) * frame_length / 1000, slen * dt)
-                    ax_signal.axvspan(start_sec, end_sec, color="orange", alpha=0.25)
+            silence_labeled = False
+            for start_sec, end_sec in true_segments(silence_flags, frame_length / 1000, slen * dt):
+                label = "silence" if not silence_labeled else None
+                ax_signal.axvspan(start_sec, end_sec, color="orange", alpha=0.25, label=label)
+                silence_labeled = True
 
         if self.show_voiced.get():
-            for idx, is_voiced in enumerate(voiced_flags):
-                if is_voiced:
-                    start_sec = idx * frame_length / 1000
-                    end_sec = min((idx + 1) * frame_length / 1000, slen * dt)
-                    ax_signal.axvspan(start_sec, end_sec, color="green", alpha=0.18)
+            show_overlay_legend = True
+            voiced_labeled = False
+            for start_sec, end_sec in true_segments(voiced_flags, frame_length / 1000, slen * dt):
+                label = "voiced" if not voiced_labeled else None
+                ax_signal.axvspan(start_sec, end_sec, color="green", alpha=0.18, label=label)
+                voiced_labeled = True
 
         if self.show_speech_music.get():
-            for idx, label in enumerate(speech_music_flags):
-                start_sec = idx * frame_length / 1000
-                end_sec = min((idx + 1) * frame_length / 1000, slen * dt)
+            show_overlay_legend = True
+            speech_labeled = False
+            music_labeled = False
+            for label, start_sec, end_sec in label_segments(speech_music_flags, frame_length / 1000, slen * dt):
                 if label == 0:
-                    ax_signal.axvspan(start_sec, end_sec, color="deepskyblue", alpha=0.14)
+                    span_label = "speech" if not speech_labeled else None
+                    ax_signal.axvspan(start_sec, end_sec, color="deepskyblue", alpha=0.14, label=span_label)
+                    speech_labeled = True
                 elif label == 1:
-                    ax_signal.axvspan(start_sec, end_sec, color="crimson", alpha=0.14)
+                    span_label = "music" if not music_labeled else None
+                    ax_signal.axvspan(start_sec, end_sec, color="crimson", alpha=0.14, label=span_label)
+                    music_labeled = True
+
+        if show_overlay_legend:
+            ax_signal.legend(loc="upper right", fontsize=9)
 
         # rysowanie parametrow wybranych w GUI
         for i, name in enumerate(plot_order):
@@ -345,30 +359,101 @@ class AudioAnalyzerGUI:
 
 # funkcje liczace parametry sygnalu
 
+def downsample_signal_for_plot(time, samples, max_points=MAX_SIGNAL_PLOT_POINTS):
+    sample_count = len(samples)
+    if sample_count <= max_points:
+        return time, samples
+    step = max(1, int(np.ceil(sample_count / max_points)))
+    return time[::step], samples[::step]
+
+def true_segments(flags, frame_duration_s, total_duration_s):
+    start_idx = None
+    for idx, flag in enumerate(flags):
+        if flag and start_idx is None:
+            start_idx = idx
+        if not flag and start_idx is not None:
+            yield start_idx * frame_duration_s, min(idx * frame_duration_s, total_duration_s)
+            start_idx = None
+
+    if start_idx is not None:
+        yield start_idx * frame_duration_s, total_duration_s
+
+def label_segments(labels, frame_duration_s, total_duration_s):
+    if not labels:
+        return
+
+    current_label = labels[0]
+    start_idx = 0
+    for idx in range(1, len(labels)):
+        if labels[idx] != current_label:
+            yield current_label, start_idx * frame_duration_s, min(idx * frame_duration_s, total_duration_s)
+            current_label = labels[idx]
+            start_idx = idx
+
+    yield current_label, start_idx * frame_duration_s, total_duration_s
+
 def volume(frames):
     ret = []
     for frame in frames:
-        ret.append(sqrt(sum(s ** 2 for s in frame) / len(frame)))
+        frame_len = len(frame)
+        if frame_len == 0:
+            ret.append(0.0)
+            continue
+        energy_sum = 0.0
+        for sample in frame:
+            value = float(sample)
+            energy_sum += value * value
+        ret.append(sqrt(energy_sum / frame_len))
     return ret
 
 def short_time_energy(frames):
     ret = []
     for frame in frames:
-        ret.append(sum(s ** 2 for s in frame) / len(frame))
+        frame_len = len(frame)
+        if frame_len == 0:
+            ret.append(0.0)
+            continue
+        energy_sum = 0.0
+        for sample in frame:
+            value = float(sample)
+            energy_sum += value * value
+        ret.append(energy_sum / frame_len)
     return ret
 
 def zero_crossing_rate(frames):
     ret = []
     for frame in frames:
-        signs = np.sign(frame)
-        ret.append(sum(abs(signs[i] - signs[i-1]) for i in range(1, len(signs))) / len(frame) / 2)
+        frame_len = len(frame)
+        if frame_len < 2:
+            ret.append(0.0)
+            continue
+        prev_sign = 1 if frame[0] > 0 else -1 if frame[0] < 0 else 0
+        crossings = 0.0
+        for idx in range(1, frame_len):
+            current = frame[idx]
+            curr_sign = 1 if current > 0 else -1 if current < 0 else 0
+            crossings += abs(curr_sign - prev_sign)
+            prev_sign = curr_sign
+        ret.append(crossings / frame_len / 2.0)
     return ret
 
 def autocorr(frame, l):
-    return sum(frame[i+l] * frame[i] for i in range(len(frame) - l - 1))
+    upper = len(frame) - l - 1
+    if upper <= 0:
+        return 0.0
+    total = 0.0
+    for i in range(upper):
+        total += float(frame[i + l]) * float(frame[i])
+    return total
 
 def amdf(frame, l):
-    return sum(abs(frame[i] - frame[i+l]) for i in range(len(frame) - l - 1)) / (len(frame) - l - 1)
+    upper = len(frame) - l - 1
+    if upper <= 0:
+        return 0.0
+    total = 0.0
+    for i in range(upper):
+        total += abs(float(frame[i]) - float(frame[i + l]))
+    return total / upper
 
 def _prepare_pitch_frame(frame):
     target_pitch_rate = 8000
@@ -486,9 +571,14 @@ def median(values):
 def clip_zcr(samples):
     if len(samples) < 2:
         return 0.0
-    signs = np.sign(samples)
-    crossings = sum(abs(signs[i] - signs[i - 1]) for i in range(1, len(signs)))
-    return crossings / len(samples) / 2
+    prev_sign = 1 if samples[0] > 0 else -1 if samples[0] < 0 else 0
+    crossings = 0.0
+    for idx in range(1, len(samples)):
+        current = samples[idx]
+        curr_sign = 1 if current > 0 else -1 if current < 0 else 0
+        crossings += abs(curr_sign - prev_sign)
+        prev_sign = curr_sign
+    return crossings / len(samples) / 2.0
 
 def energy_entropy(ste_values):
     if not ste_values:
@@ -511,9 +601,20 @@ def speech_music_label(code):
 
 def clip_metrics_from_features(samples, sample_rate, vol, ste, zcr, f0, silence_flags, voiced_flags, speech_music_flags):
     duration_s = len(samples) / sample_rate if sample_rate else 0.0
-    clip_energy = safe_mean([s * s for s in samples])
+    if len(samples) > 0:
+        energy_sum = 0.0
+        peak = 0.0
+        for sample in samples:
+            value = float(sample)
+            energy_sum += value * value
+            abs_value = abs(value)
+            if abs_value > peak:
+                peak = abs_value
+        clip_energy = energy_sum / len(samples)
+    else:
+        clip_energy = 0.0
+        peak = 0.0
     clip_rms = sqrt(clip_energy) if clip_energy > 0 else 0.0
-    peak = max(abs(s) for s in samples) if len(samples) > 0 else 0.0
     crest_factor = peak / clip_rms if clip_rms > 0 else 0.0
 
     voiced_f0 = [pitch for pitch, flag in zip(f0, voiced_flags) if flag == 1 and pitch > 0]
