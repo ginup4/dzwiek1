@@ -99,11 +99,28 @@ def spectral_flatness(magnitude):
     return geo / arith
 
 
-def compute_spectral_features(frames, sample_rate, rolloff_pct=0.85, window_name="prostokatne"):
+def fundamental_cepstrum(magnitude, sample_rate, fmin=50, fmax=400):
+    magnitude = np.maximum(magnitude, 1e-10)
+    log_spectrum = np.log(magnitude)
+    cepstrum = np.fft.irfft(log_spectrum)
+    qmin = int(sample_rate / fmax)
+    qmax = int(sample_rate / fmin)
+    cepstrum_region = cepstrum[qmin:qmax]
+    if len(cepstrum_region) == 0:
+        return 0.0
+    peak_index = np.argmax(cepstrum_region)
+    peak_quefrency = peak_index + qmin
+    return sample_rate / peak_quefrency
+
+
+def compute_spectral_features(frames, sample_rate, spectrogram_max_freq, window_name="prostokatne", rolloff_pct=0.85):
     centroid_values = []
     bandwidth_values = []
     rolloff_values = []
     flatness_values = []
+    f0_cepstrum_values = []
+
+    magnitude_arrays = []
 
     if sample_rate <= 0:
         zeros = [0.0] * len(frames)
@@ -113,6 +130,8 @@ def compute_spectral_features(frames, sample_rate, rolloff_pct=0.85, window_name
             "spectral_rolloff_hz": zeros,
             "spectral_flatness": zeros,
         }
+
+    spectrogram_max_i = None
 
     for frame in frames:
         if len(frame) == 0:
@@ -124,14 +143,24 @@ def compute_spectral_features(frames, sample_rate, rolloff_pct=0.85, window_name
 
         windowed, _ = apply_window(frame, window_name)
         freqs, magnitude = fft_spectrum(windowed, sample_rate)
+        if spectrogram_max_i is None:
+            indices = np.where(freqs > spectrogram_max_freq)
+            spectrogram_max_i = indices[0][0] if indices[0].size > 0 else -1
+        magnitude_arrays.append(magnitude)
         centroid_values.append(spectral_centroid(freqs, magnitude))
         bandwidth_values.append(spectral_bandwidth(freqs, magnitude))
         rolloff_values.append(spectral_rolloff(freqs, magnitude, rolloff_pct))
         flatness_values.append(spectral_flatness(magnitude))
+        f0_cepstrum_values.append(fundamental_cepstrum(magnitude, sample_rate))
+
+    spectrogram_matrix = np.column_stack([mag[:spectrogram_max_i] for mag in magnitude_arrays if mag.shape == magnitude_arrays[0].shape])
+    spectrogram_matrix /= np.max(spectrogram_matrix)
 
     return {
         "spectral_centroid_hz": centroid_values,
         "spectral_bandwidth_hz": bandwidth_values,
         "spectral_rolloff_hz": rolloff_values,
         "spectral_flatness": flatness_values,
+        "spectrogram": spectrogram_matrix,
+        "fundamental_cepstrum": f0_cepstrum_values,
     }

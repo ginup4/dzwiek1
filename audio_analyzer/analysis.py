@@ -15,12 +15,13 @@ from .time_features import (
 )
 
 
-def frame_signal(samples, sample_rate, frame_length_ms):
+def frame_signal(samples, sample_rate, frame_length_ms, overlap=0):
     frame_slen = int(sample_rate * frame_length_ms / 1000)
+    overlap_slen = int(frame_slen * overlap / 100)
     if frame_slen <= 0:
         raise ValueError("Dlugosc ramki musi byc > 0")
     slen = len(samples)
-    frames = [samples[s:s + frame_slen] for s in range(0, slen, frame_slen)]
+    frames = [samples[s:s + frame_slen] for s in range(0, slen, frame_slen - overlap_slen)]
     if sample_rate > 0:
         time_axis = np.arange(slen, dtype=np.float64) / sample_rate
     else:
@@ -29,8 +30,8 @@ def frame_signal(samples, sample_rate, frame_length_ms):
     return frames, time_axis, frame_time
 
 
-def analyze_signal(samples, sample_rate, frame_length_ms, vol_threshold, zcr_threshold, include_amdf=False):
-    frames, time_axis, frame_time = frame_signal(samples, sample_rate, frame_length_ms)
+def analyze_signal(samples, sample_rate, frame_length_ms, frame_overlap_perc, vol_threshold, zcr_threshold, spectrogram_max_freq, window_name, include_amdf=False):
+    frames, time_axis, frame_time = frame_signal(samples, sample_rate, frame_length_ms, frame_overlap_perc)
 
     volume_values = volume(frames)
     ste_values = short_time_energy(frames)
@@ -41,7 +42,7 @@ def analyze_signal(samples, sample_rate, frame_length_ms, vol_threshold, zcr_thr
     voiced_flags = voiced_unvoiced_from_features(volume_values, zcr_values, f0_autocorr_values, vol_threshold, zcr_threshold)
     speech_music_flags = speech_music_from_features(volume_values, zcr_values, f0_autocorr_values, silence_flags)
 
-    spectral_features = compute_spectral_features(frames, sample_rate)
+    spectral_features = compute_spectral_features(frames, sample_rate, spectrogram_max_freq, window_name)
     clip_metrics = clip_metrics_from_features(
         samples,
         sample_rate,
@@ -68,6 +69,8 @@ def analyze_signal(samples, sample_rate, frame_length_ms, vol_threshold, zcr_thr
         "spectral_bandwidth_hz": spectral_features["spectral_bandwidth_hz"],
         "spectral_rolloff_hz": spectral_features["spectral_rolloff_hz"],
         "spectral_flatness": spectral_features["spectral_flatness"],
+        "spectrogram": spectral_features["spectrogram"],
+        "fundamental_cepstrum": spectral_features["fundamental_cepstrum"],
     }
 
     duration_s = len(samples) / sample_rate if sample_rate else 0.0

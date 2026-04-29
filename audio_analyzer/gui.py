@@ -25,6 +25,8 @@ class AudioAnalyzerGUI:
         self.last_analysis = None
 
         self.frame_length_ms = tk.IntVar(value=40)
+        self.frame_overlap_perc = tk.IntVar(value=0)
+        self.spectrogram_max_freq = tk.IntVar(value=3000)
         self.show_volume = tk.BooleanVar(value=False)
         self.show_ste = tk.BooleanVar(value=False)
         self.show_zcr = tk.BooleanVar(value=False)
@@ -37,6 +39,8 @@ class AudioAnalyzerGUI:
         self.show_spectral_bandwidth = tk.BooleanVar(value=False)
         self.show_spectral_rolloff = tk.BooleanVar(value=False)
         self.show_spectral_flatness = tk.BooleanVar(value=False)
+        self.show_spectrogram = tk.BooleanVar(value=False)
+        self.show_fund_cepstrum = tk.BooleanVar(value=False)
         self.silence_vol_threshold = tk.DoubleVar(value=0.01)
         self.silence_zcr_threshold = tk.DoubleVar(value=0.1)
 
@@ -63,11 +67,17 @@ class AudioAnalyzerGUI:
         ttk.Label(settings_frame, text="Dlugosc ramki [ms]:").grid(row=0, column=0, sticky="w")
         ttk.Entry(settings_frame, textvariable=self.frame_length_ms, width=10).grid(row=0, column=1, sticky="w")
 
+        ttk.Label(settings_frame, text="Overlap ramki [%]:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(settings_frame, textvariable=self.frame_overlap_perc, width=10).grid(row=0, column=3, sticky="w")
+
         ttk.Label(settings_frame, text="Silence VOL threshold:").grid(row=1, column=0, sticky="w")
         ttk.Entry(settings_frame, textvariable=self.silence_vol_threshold, width=10).grid(row=1, column=1, sticky="w")
 
         ttk.Label(settings_frame, text="Silence ZCR threshold:").grid(row=2, column=0, sticky="w")
         ttk.Entry(settings_frame, textvariable=self.silence_zcr_threshold, width=10).grid(row=2, column=1, sticky="w")
+
+        ttk.Label(settings_frame, text="Spectrogram max frequency:").grid(row=3, column=0, sticky="w")
+        ttk.Entry(settings_frame, textvariable=self.spectrogram_max_freq, width=10).grid(row=3, column=1, sticky="w")
 
         options_frame = ttk.LabelFrame(self.root, text="Wykresy parametrow", padding=10)
         options_frame.pack(fill="x", padx=10, pady=5)
@@ -88,6 +98,8 @@ class AudioAnalyzerGUI:
         ttk.Checkbutton(spectral_frame, text="Spectral bandwidth", variable=self.show_spectral_bandwidth).grid(row=0, column=1, sticky="w")
         ttk.Checkbutton(spectral_frame, text="Spectral rolloff", variable=self.show_spectral_rolloff).grid(row=1, column=0, sticky="w")
         ttk.Checkbutton(spectral_frame, text="Spectral flatness", variable=self.show_spectral_flatness).grid(row=1, column=1, sticky="w")
+        ttk.Checkbutton(spectral_frame, text="Spectrogram", variable=self.show_spectrogram).grid(row=2, column=0, sticky="w")
+        ttk.Checkbutton(spectral_frame, text="Fundamental (cepstrum)", variable=self.show_fund_cepstrum).grid(row=2, column=1, sticky="w")
 
         fft_frame = ttk.LabelFrame(self.root, text="FFT i okna", padding=10)
         fft_frame.pack(fill="x", padx=10, pady=5)
@@ -265,8 +277,10 @@ class AudioAnalyzerGUI:
 
         try:
             frame_length = int(self.frame_length_ms.get())
+            frame_overlap = int(self.frame_overlap_perc.get())
             vol_thr = float(self.silence_vol_threshold.get())
             zcr_thr = float(self.silence_zcr_threshold.get())
+            spectrogram_max_freq = int(self.spectrogram_max_freq.get())
         except ValueError:
             messagebox.showerror("Blad", "Niepoprawne wartosci numeryczne")
             return
@@ -290,8 +304,11 @@ class AudioAnalyzerGUI:
                 samples,
                 sample_rate,
                 frame_length,
+                frame_overlap,
                 vol_thr,
                 zcr_thr,
+                spectrogram_max_freq,
+                self.window_name.get(),
                 include_amdf=self.show_fund_amdf.get(),
             )
         except ValueError as exc:
@@ -340,6 +357,10 @@ class AudioAnalyzerGUI:
             plot_order.append("spectral_rolloff_hz")
         if self.show_spectral_flatness.get():
             plot_order.append("spectral_flatness")
+        if self.show_fund_cepstrum.get():
+            plot_order.append("fundamental_cepstrum")
+        if self.show_spectrogram.get():
+            plot_order.append("spectrogram")
 
         plot_titles = {
             "volume": "volume",
@@ -354,6 +375,8 @@ class AudioAnalyzerGUI:
             "spectral_bandwidth_hz": "spectral_bandwidth_hz",
             "spectral_rolloff_hz": "spectral_rolloff_hz",
             "spectral_flatness": "spectral_flatness",
+            "spectrogram": "spectrogram",
+            "fundamental_cepstrum": "fundamental_cepstrum",
         }
 
         nplots = 1 + len(plot_order)
@@ -412,6 +435,12 @@ class AudioAnalyzerGUI:
                 if name == "speech_music":
                     ax.set_yticks([-1, 0, 1])
                     ax.set_yticklabels(["silence", "speech", "music"])
+            elif name == "spectrogram":
+                #ax.set_yscale("log")
+                ax.imshow(frame_features[name],
+                          aspect="auto",
+                          origin="lower",
+                          extent=[frame_time[0], frame_time[-1], 0, spectrogram_max_freq])
             else:
                 ax.plot(frame_time, frame_features[name])
 
